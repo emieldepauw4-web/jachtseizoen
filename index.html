@@ -5,12 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jachtseizoen HQ Pro</title>
     
-    <!-- Leaflet Kaart CSS & JS -->
+    <!-- Leaflet Kaart CSS & JS (Essentiële basiskaarten) -->
     <link rel="stylesheet" href="https://unpkg.com" />
     <script src="https://unpkg.com"></script>
-
-    <!-- Leaflet KML Plugin -->
-    <script src="https://jsdelivr.net"></script>
 
     <!-- Firebase Legacy SDK -->
     <script src="https://gstatic.com"></script>
@@ -78,7 +75,7 @@
         var spelerRol = '';
         var gpsWatcher = null;
         var countdownInterval = null;
-        var PING_INTERVAL_MINUTEN = 5; // Verander dit eventueel naar 10 of 15 minuten
+        var PING_INTERVAL_MINUTEN = 5; 
 
         function startSpel(rol) {
             spelerRol = rol;
@@ -90,25 +87,59 @@
                 document.getElementById('timer-veld').classList.remove('hidden');
             }
 
-            // 1. Start de kaart op basiscoördinaten
-            map = L.map('map').setView([52.1326, 5.2913], 10);
+            // 1. Start de kaart op basiscoördinaten (centreren we direct op)
+            map = L.map('map').setView([52.1326, 5.2913], 12);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap'
             }).addTo(map);
 
-            // 2. JOUW GOOGLE MAP OVERLAP INLADEN (haalt doc.kml op uit je GitHub map)
+            // 2. JOUW GOOGLE MAP OVERLAP INLADEN (Zonder externe plugins)
             fetch('doc.kml')
                 .then(res => res.text())
                 .then(kmltext => {
                     const parser = new DOMParser();
-                    const kml = parser.parseFromString(kmltext, 'text/xml');
-                    const track = new L.KML(kml);
-                    map.addLayer(track);
+                    const kmlDoc = parser.parseFromString(kmltext, 'text/xml');
                     
-                    const bounds = track.getBounds();
-                    if (bounds.isValid()) { map.fitBounds(bounds); }
+                    // We vissen handmatig alle getekende coördinaten uit jouw doc.kml bestand
+                    const coordinatesNodes = kmlDoc.getElementsByTagName('coordinates');
+                    let bounds = L.latLngBounds();
+
+                    for (let i = 0; i < coordinatesNodes.length; i++) {
+                        const coordsString = coordinatesNodes[i].textContent.trim();
+                        const coordsArray = coordsString.split(/\s+/);
+                        const latLngs = [];
+
+                        coordsArray.forEach(coord => {
+                            const parts = coord.split(',');
+                            if (parts.length >= 2) {
+                                const lng = parseFloat(parts[0]);
+                                const lat = parseFloat(parts[1]);
+                                if (!isNaN(lat) && !isNaN(lng)) {
+                                    const point = [lat, lng];
+                                    latLngs.push(point);
+                                    bounds.extend(point);
+                                }
+                            }
+                        });
+
+                        // Als het een lijn of grens is, teken hem direct rood op de kaart
+                        if (latLngs.length > 1) {
+                            L.polyline(latLngs, {color: 'red', weight: 4, opacity: 0.7}).addTo(map);
+                        } else if (latLngs.length === 1) {
+                            // Als het een losse POI/marker zone is
+                            L.circle(latLngs[0], {radius: 100, color: 'blue', fillColor: '#30a', fillOpacity: 0.2}).addTo(map);
+                        }
+                    }
+                    
+                    // Zoom de kaart automatisch perfect in op jouw getekende KML grenzen
+                    if (bounds.isValid()) {
+                        map.fitBounds(bounds);
+                    }
                 })
-                .catch(err => console.error("Google kaart overlap kon niet laden: ", err));
+                .catch(err => {
+                    document.getElementById('status-veld').innerText = "Let op: doc.kml kon niet gelezen worden.";
+                    console.error(err);
+                });
 
             // 3. Volg ALTIJD de eigen locatie van de telefoon (Blauwe stip)
             volgEigenLocatie();
@@ -169,54 +200,43 @@
                         var blauwIcoon = L.icon({
                             iconUrl: 'https://google.com',
                             iconSize:,
-                            iconAnchor: [12, 41]
+                            iconAnchor: [12, 12]
                         });
                         mijnLocatieMarker = L.marker([lat, lng], {icon: blauwIcoon}).addTo(map).bindPopup("Jij hier").openPopup();
                     }
-                }, function(err) { console.log("GPS toegang geweigerd."); }, { enableHighAccuracy: true });
-            }
-        }
-
-        function startGpsVerzending() {
-            if (gpsWatcher) return; // Al actief
-            
-            gpsWatcher = navigator.geolocation.watchPosition(function(position) {
-                var lat = position.coords.latitude;
-                var lng = position.coords.longitude;
-
-                document.getElementById('status-veld').innerText = "🚨 JE WORDT GEJAAGD! Locatie verzenden...";
-
-                // Boef stuurt continu data naar de cloud
-                db.collection("spellen").doc("jachtseizoen1").set({
-                    boef_lat: lat,
-                    boef_lng: lng,
-                    tijdstip: new Date().getTime()
-                }, { merge: true });
-
-            }, function(err) { alert("Zet je GPS aan!"); }, { enableHighAccuracy: true });
-        }
-
-        function stopGpsVerzending() {
-            if (gpsWatcher) {
-                navigator.geolocation.clearWatch(gpsWatcher);
-                gpsWatcher = null;
-            }
-        }
-
-        function startTimerSysteem(startTijd) {
-            if (!startTijd) return;
-            clearInterval(countdownInterval);
-
-            var boefRef = db.collection("spellen").doc("jachtseizoen1");
-
-            countdownInterval = setInterval(function() {
-                var nu = new Date().getTime();
-                var startMillis = startTijd.toDate().getTime();
-                var verstrekenSec = Math.floor((nu - startMillis) / 1000);
-                
-                var intervalSec = PING_INTERVAL_MINUTEN * 60;
-                var resterendeSec = intervalSec - (verstrekenSec % intervalSec);
-                var minuten = Math.floor(resterendeSec / 60);
+                    }, function(err) { console.log("GPS toegang geweigerd."); }, { enableHighAccuracy: true });
+}
+}
+function startGpsVerzending() {
+if (gpsWatcher) return;
+gpsWatcher = navigator.geolocation.watchPosition(function(position) {
+var lat = position.coords.latitude;
+var lng = position.coords.longitude;
+document.getElementById('status-veld').innerText = "🚨 JE WORDT GEJAAGD! Locatie verzenden...";
+db.collection("spellen").doc("jachtseizoen1").set({
+boef_lat: lat,
+boef_lng: lng,
+tijdstip: new Date().getTime()
+}, { merge: true });
+}, function(err) { alert("Zet je GPS aan!"); }, { enableHighAccuracy: true });
+}
+function stopGpsVerzending() {
+if (gpsWatcher) {
+navigator.geolocation.clearWatch(gpsWatcher);
+gpsWatcher = null;
+}
+}
+function startTimerSysteem(startTijd) {
+if (!startTijd) return;
+clearInterval(countdownInterval);
+var boefRef = db.collection("spellen").doc("jachtseizoen1");
+countdownInterval = setInterval(function() {
+var nu = new Date().getTime();
+var startMillis = startTijd.toDate().getTime();
+var verstrekenSec = Math.floor((nu - startMillis) / 1000);
+var intervalSec = PING_INTERVAL_MINUTEN * 60;
+var resterendeSec = intervalSec - (verstrekenSec % intervalSec);
+var minuten = Math.floor(resterendeSec / 60);
 var seconden = resterendeSec % 60;
 document.getElementById('timer-veld').innerText = "VOLGENDE PING: " +
 (minuten < 10 ? "0" : "") + minuten + ":" + (seconden < 10 ? "0" : "") + seconden;
@@ -238,7 +258,7 @@ boefMarker.setLatLng([lat, lng]);
 var roodIcoon = L.icon({
 iconUrl: 'google.com',
 iconSize:,
-iconAnchor: [12, 41]
+iconAnchor: [12, 12]
 });
 boefMarker = L.marker([lat, lng], {icon: roodIcoon}).addTo(map).bindPopup("BOEF GESPOT!").openPopup();
 }
